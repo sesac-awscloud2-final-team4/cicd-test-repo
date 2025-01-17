@@ -1,0 +1,52 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+      
+env:
+  DOCKER_REPOSITORY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/docker-repo
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  GITHUB_ID: ${{ secrets.MY_GITHUB_ID }}  # 변경된 시크릿 이름
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+
+    - name: Login to ECR
+      run: |
+        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $DOCKER_REPOSITORY
+
+    - name: Build, tag, and push image to ECR
+      id: build-image
+      run: |
+        GIT_HASH=$(git rev-parse --short "$GITHUB_SHA")
+        docker build -t $DOCKER_REPOSITORY:$GIT_HASH .
+        docker push $DOCKER_REPOSITORY:$GIT_HASH
+        echo "::set-output name=image::$DOCKER_REPOSITORY:$GIT_HASH"
+        
+    - name: Repository checkout
+      uses: actions/checkout@v2
+      with:
+        repository: ${{ secrets.MY_GITHUB_ID }}/argocd-kube  # 변경된 시크릿 이름
+        token: ${{ secrets.MY_GITHUB_TOKEN }}
+
+    - name: Add date and push
+      run: |
+        GIT_HASH=$(git rev-parse --short "$GITHUB_SHA")
+        sed -i "16s|.*|      - image: $DOCKER_REPOSITORY:$GIT_HASH|g" deployment.yaml
+        git add .
+        git config --global user.email "github-actions@github.com"
+        git config --global user.name "github-actions"
+        git commit -am "Inject Tag"
+        git push
